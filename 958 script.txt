@@ -1,0 +1,537 @@
+#----------------------------------------------------------------------------------------------------------------------------
+#  E N E R G Y 2 1   B . V .
+# ---------------------------------------------------------------------------------------------------------------------------
+#
+#  Script   : Detemine subscription parameters
+#             This script determines the current amount of connections and time series in the database schema where the script is run.
+#             When database contains multiple database schemas, please run script in every schema separately.
+#
+#  Database    : Oracle
+#  Trigger     : Time triggered
+#  Author      : SR
+#  Date        : 17-10-2022
+#  Version     : 1.1
+#  Info        : servicedesk@energy21.com
+#  E21nr       : 958
+#
+#  Input       : Database
+#  Inputloc    : Database
+#  Output      :
+#  Outputloc   :
+#
+#  Revisions:
+#  Author   Date          Version   Description
+#  -------  ----------    ------    -------------
+#  KB       xx-xx-2020    v0.1      Initial version
+#  KB       13-01-2021    v0.2      Adapt based on checks
+#  SR       23-12-2021    v0.9
+#  SR       27-09-2022    v1.0      Support for MSSQL and ORACLE, split in Electricity and Gas counts
+#  SR       17-10-2022    v1.1      Support for MSSQL and ORACLE, split in Electricity and Gas counts
+#  SR       19-12-2022    v1.2      Added meter receive date to filter
+#  SR       19-12-2022    v1.3      Added additional logging to track progress of meter data check
+# -------------------------------------------------------------------------------------------------------------------------
+ 
+# -------------------------------------------------------------------------------------------------------------------------
+# SCRIPT PARAMETERS
+# -------------------------------------------------------------------------------------------------------------------------
+ 
+# -------------------------------------------------------------------------------------------------------------------------
+# WORKSHEET VARIABLES
+# -------------------------------------------------------------------------------------------------------------------------
+ 
+VAR CheckYear MaxNrMeters DATABASE_TYPE DATABASE_SCHEMA
+ 
+DEF CheckYear = 2023
+# Batch size of DBIMPORT:
+DEF MaxNrMeters = 50
+# Choose MSSQL or ORACLE
+DEF DATABASE_TYPE = "MSSQL"
+DEF DATABASE_SCHEMA = %DBSCHEMA$%
+ 
+# -------------------------------------------------------------------------------------------------------------------------
+# End of parameters (user settings)      -       DO NOT EDIT BELOW THIS LINE
+# -------------------------------------------------------------------------------------------------------------------------
+ 
+# -------------------------------------------------------------------------------------------------------------------------
+# SCRIPT VARIABLES
+# -------------------------------------------------------------------------------------------------------------------------
+ 
+VAR sql[] sqlstr test maxcol Counting startrow endrow ImportStr logtext timecheck
+VAR i_type Type[] ImportType[] totalcount NrGP ActiveMetersTotal ActiveMetersTemp data nextrow
+VAR ActiveMetersTotalCat i TM_meters_withNaNs check StartYear EndYear
+VAR NrMeters gridcolumn CountDaysValues x LastColumn
+ 
+# -------------------------------------------------------------------------------------------------------------------------
+# START OF SCRIPT
+# -------------------------------------------------------------------------------------------------------------------------
+ 
+ 
+DBREFRESH
+DEF logtext = "Checking subscription parameters for year "+%CheckYear$%+" in database schema "+%DBSCHEMA$%+"."
+INFOLINE 1 %logtext$%
+DEF StartYear = %CheckYear$%+"-01-01"
+DEF EndYear   = %CheckYear$%+"-12-31"
+ 
+ 
+# ---------------------------------------
+# Check amount of active gridpoints
+# ---------------------------------------
+ 
+DEF sql[1] = "SELECT COUNT(DISTINCT(gp.EANCODE)) FROM "+%DATABASE_SCHEMA$%+".D_GRIDPOINT gp "
+DEF sql[2] = "JOIN "+%DATABASE_SCHEMA$%+".D_SUPPLYCONTRACT SC ON SC.GRIDPOINTNR = gp.NR "
+DEF sql[3] = "JOIN "+%DATABASE_SCHEMA$%+".D_PHYSICALPRODUCT DP ON dp.NR = gp.PHYSICALPRODUCTNR "
+IF UPPERCASE(%DATABASE_TYPE$%) == "ORACLE"
+  DEF sql[4] = " WHERE SC.STARTDATE <= TO_DATE ('"+%EndYear$%+"', 'YYYY-MM-DD') "
+  DEF sql[5] = " AND SC.ENDDATE >= TO_DATE ('"+%StartYear$%+"', 'YYYY-MM-DD') "
+  DEF sql[6] = " AND SC.ENDDATE >= SC.STARTDATE "
+ELSE
+  IF  UPPERCASE(%DATABASE_TYPE$%) == "MSSQL"
+    DEF sql[4] = "WHERE SC.STARTDATE <= CONVERT (DATETIME, '"+%EndYear$%+"', 120) "
+    DEF sql[5] = "AND SC.ENDDATE >= CONVERT (DATETIME, '"+%StartYear$%+"', 120) "
+    DEF sql[6] = "AND SC.ENDDATE >= SC.STARTDATE "
+  ENDIF
+ENDIF
+DEF sql[7] = "AND DP.PRODUCTID = 0"
+DEF sql[0] = 7
+ 
+MAKESTRINGOFARRAY sqlstr = sql[] %sql[0]% 1 " "
+NEWGRID 1 1 80
+DBSQLSELECT test = 1 1 %sqlstr$%
+IF %test$% != "OK"
+  ERRORLINE 1 %test$%
+ENDIF
+ 
+DEFXY NrGP = 1 1
+DEF logtext = "Total active 'Electricity' gridpoints: "+%NrGP$%
+INFOLINE 1 %logtext$%
+ 
+ 
+DEF sql[1] = "SELECT COUNT(DISTINCT(gp.EANCODE)) FROM "+%DATABASE_SCHEMA$%+".D_GRIDPOINT gp "
+DEF sql[2] = "JOIN "+%DATABASE_SCHEMA$%+".D_SUPPLYCONTRACT SC ON SC.GRIDPOINTNR = gp.NR "
+DEF sql[3] = "JOIN "+%DATABASE_SCHEMA$%+".D_PHYSICALPRODUCT DP ON dp.NR = gp.PHYSICALPRODUCTNR "
+IF UPPERCASE(%DATABASE_TYPE$%) == "ORACLE"
+  DEF sql[4] = " WHERE SC.STARTDATE <= TO_DATE ('"+%EndYear$%+"', 'YYYY-MM-DD') "
+  DEF sql[5] = " AND SC.ENDDATE >= TO_DATE ('"+%StartYear$%+"', 'YYYY-MM-DD') "
+  DEF sql[6] = " AND SC.ENDDATE >= SC.STARTDATE "
+ELSE
+  IF  UPPERCASE(%DATABASE_TYPE$%) == "MSSQL"
+    DEF sql[4] = "WHERE SC.STARTDATE <= CONVERT (DATETIME, '"+%EndYear$%+"', 120) "
+    DEF sql[5] = "AND SC.ENDDATE >= CONVERT (DATETIME, '"+%StartYear$%+"', 120) "
+    DEF sql[6] = "AND SC.ENDDATE >= SC.STARTDATE "
+  ENDIF
+ENDIF
+DEF sql[7] = "AND DP.PRODUCTID = 1"
+DEF sql[0] = 7
+ 
+MAKESTRINGOFARRAY sqlstr = sql[] %sql[0]% 1 " "
+NEWGRID 1 1 80
+DBSQLSELECT test = 1 1 %sqlstr$%
+IF %test$% != "OK"
+  ERRORLINE 1 %test$%
+ENDIF
+ 
+DEFXY NrGP = 1 1
+DEF logtext = "Total active 'Gas' gridpoints: "+%NrGP$%
+INFOLINE 1 %logtext$%
+ 
+# ---------------------------------------
+# Check amount of active prices
+# ---------------------------------------
+ 
+MAKEARRAYOFSTRING Type[] = "Prices" ";"
+MAKEARRAYOFSTRING ImportType[] = "12" ";"
+ 
+FOR i_type = 1 TO %Type[0]%
+ 
+  NEWGRID 1 1 80
+  CLEARARRAY sql[]
+  DEF ActiveMetersTotal = ""
+ 
+  IF %Type[i_type]$% == "Prices"
+    DEF sql[1] = "SELECT CODE FROM "+%DATABASE_SCHEMA$%+".D_PRICE WHERE PRICETYPE <> 1 "
+    DEF sql[0] = 1
+  ENDIF
+  MAKESTRINGOFARRAY sqlstr = sql[] %sql[0]% 1 " "
+ 
+  DBSQLSELECT test = 1 1 %sqlstr$%
+  IF %test$% != "OK"
+    ERRORLINE 1 %test$%
+  ENDIF
+ 
+  # ---------------------------------------
+  # Check how many prices actually received data
+  # Check all prices but to keep it from running in a time out we check the metes in batches.
+  # ---------------------------------------
+ 
+  # initial values:
+  DEF Counting = 0
+  DEF startrow = 1
+  DEF endrow = 0
+ 
+ 
+  WHILE %endrow% < %LASTROW%
+ 
+    DEF endrow = %startrow% + %MaxNrMeters% - 1
+    IF %endrow% > %LASTROW%
+      DEF endrow = %LASTROW%
+    ENDIF
+ 
+    COUNTCOLUMNS MaxCol = 1
+    COPYCELLSTOVAR ImportStr = 1 1 %startrow% %endrow%
+    COPYCELLSTOVAR Data = 1 %MaxCol% %startrow% %endrow% ";" "|"
+    COPYCELLS 1 %MaxCol% 1 %LASTROW%
+ 
+    # with this period and NaN count, you can easily check if a meter received any data this year.
+    DBIMPORT test = %ImportStr$% "yyyy.mm.dd" "hh:mm" %ImportType[i_type]% %StartYear$% %EndYear$% PX 0 0 1 1 "0" "" "" "0" "0" "" "" "0"
+    IF %test% < 0
+      DEF logtext = "Count before block: " + %Counting$%
+      INFOLINE 1 %logtext$%
+      DEF logtext = "Checked < " + %startrow$%
+      INFOLINE 1 %logtext$%
+      DEF logtext = "Error on DBIMPORT " + %test$%
+      ERRORLINE 1 %logtext$%
+    ENDIF
+ 
+    # remove empty meters
+    DELETECOLUMNS 1 2
+    COUNTCOLUMNS maxcol = 1
+    MATRIX2COLUMN 1 %maxcol% 1 %LASTROW% 1
+    COLUMN2MATRIX 1 1 %LASTROW% 0 2
+    #
+    PASTECELLSFROMVAR Data 3 1 ";" "|"
+ 
+    DELETEROWS 1 %LASTROW% 2 "NaN" 1
+    IF %LASTROW% > 0
+      COPYCELLSTOVAR ActiveMetersTemp = 1 1 1 %LASTROW% ","
+      DEF ActiveMetersTotal = %ActiveMetersTotal$% + "," + %ActiveMetersTemp$%
+    ENDIF
+ 
+    # add remaining meters to count an reset the grid
+    DEF Counting = %Counting% + %LASTROW%
+    DEF startrow = %startrow% + %MaxNrMeters%
+    NEWGRID 1 1 80
+    PASTECELLS 1 1
+    IF %startrow% > %LASTROW%
+      # check if we are done
+      BREAK
+    ENDIF
+ 
+  ENDWHILE
+ 
+  NEWGRID 1 1 80
+  PASTECELLSFROMVAR ActiveMetersTotal 1 1 ","
+ 
+  DEF logtext = "Number of active "+%Type[i_type]$%+": " + %Counting$% + " / " + %LASTROW$%
+  INFOLINE 1 %logtext$%
+  DEF totalcount = %totalcount% +  %Counting%
+NEXT
+ 
+# -------------------------------------------------------------------------------------------------
+# Check amount of active 'Electricity' telemetric meters
+# -------------------------------------------------------------------------------------------------
+ 
+NEWGRID 1 1 80
+CLEARARRAY sql[]
+DEF ActiveMetersTotal = ""
+ 
+DEF sql[1] = "SELECT m.CODE, mp.PRODUCTNAME, seg.DESCRIPTION FROM "+%DATABASE_SCHEMA$%+".D_METER m "
+DEF sql[2] = " LEFT JOIN "+%DATABASE_SCHEMA$%+".D_METERPRODUCT mp on m.METERPRODUCTNR = mp.NR "
+DEF sql[3] = " LEFT JOIN "+%DATABASE_SCHEMA$%+".D_METERSEGMETER seglink on m.NR = seglink.METERNR "
+DEF sql[4] = " LEFT JOIN "+%DATABASE_SCHEMA$%+".D_METERSEGMENT seg on seglink.SEGNR = seg.NR "
+DEF sql[5] = " WHERE m.METERTYPE = 0 AND seg.ADMNR = 0 "
+# Only check on startdate to exclude histotic meters, meters from the new year will be excluded based on data content
+IF UPPERCASE(%DATABASE_TYPE$%) == "ORACLE"
+  DEF sql[6] = " AND m.RECEIVEDATE >= TO_DATE('"+%StartYear$%+"','YYYY-MM-DD')"
+ELSE
+  IF  UPPERCASE(%DATABASE_TYPE$%) == "MSSQL"
+    DEF sql[6] = " AND m.RECEIVEDATE >= CONVERT(DATETIME, '"+%StartYear$%+"', 120)"
+  ENDIF
+ENDIF
+#IF UPPERCASE(%DATABASE_TYPE$%) == "ORACLE"
+#  DEF sql[6] = " AND  m.STARTDATE < TO_DATE('"+%EndYear$%+"','YYYY-MM-DD')"
+#  DEF sql[7] = " AND ( m.ENDDATE   > TO_DATE('"+%StartYear$%+"','YYYY-MM-DD') OR m.ENDDATE = TO_DATE('1899-12-30', 'YYYY-MM-DD') ) "
+#ELSE
+#  IF  UPPERCASE(%DATABASE_TYPE$%) == "MSSQL"
+#    DEF sql[6] = " AND  m.STARTDATE < CONVERT (DATETIME, '"+%EndYear$%+"', 120)"
+#    DEF sql[7] = " AND ( m.ENDDATE   > CONVERT (DATETIME, '"+%StartYear$%+"', 120) OR m.ENDDATE = CONVERT (DATETIME, '1899-12-30', 120) ) "
+#  ENDIF
+#ENDIF
+DEF sql[8] = " AND  mp.PRODUCTID = 1"
+DEF sql[0] = 8
+MAKESTRINGOFARRAY sqlstr = sql[] %sql[0]% 1 " "
+#INFOLINE 1 %sqlstr$%
+DBSQLSELECT test = 1 1 %sqlstr$%
+IF %test$% != "OK"
+  ERRORLINE 1 %test$%
+ENDIF
+DEF TM_meters_withNaNs = %LASTROW%
+ 
+######TESTING ############
+#DELETEROWS 251 %LASTROW%
+######TESTING ############
+ 
+# ---------------------------------------
+# Check how many meters actually received data
+# Check all meters but to keep it from running in a time out we check the metes in batches.
+# ---------------------------------------
+ 
+DEF Counting = 0
+DEF startrow = 1
+DEF endrow = 0
+ 
+DEF logtext = "This amount of 'Electricity' meters will be checked for data: " + %LASTROW$%
+INFOLINE 1 %logtext$%
+ 
+WHILE %endrow% < %LASTROW%
+ 
+  DEF endrow = %startrow% + %MaxNrMeters% - 1
+  IF %endrow% > %LASTROW%
+    DEF endrow = %LASTROW%
+  ENDIF
+ 
+  COUNTCOLUMNS MaxCol = 1
+  COPYCELLSTOVAR ImportStr = 1 1 %startrow% %endrow%
+  COPYCELLSTOVAR Data = 1 %MaxCol% %startrow% %endrow% ";" "|"
+  COPYCELLS 1 %MaxCol% 1 %LASTROW%
+ 
+  # with this period and NaN count, you can easily check if a meter received any data this year.
+  DBIMPORT test = %ImportStr$% "yyyy.mm.dd" "hh:mm" 1 %StartYear$% %EndYear$% DX 0 0 1 1 "0" "" "" "0" "0" "" "0" "0"
+  IF %test% < 0
+    DEF logtext = "Count before block: " + %Counting$%
+    INFOLINE 1 %logtext$%
+    DEF logtext = "Checked < " + %startrow$%
+    INFOLINE 1 %logtext$%
+    DEF logtext = "Error on DBIMPORT " + %test$%
+    ERRORLINE 1 %logtext$%
+  ENDIF
+ 
+  COUNTCOLUMNS LastColumn = 1
+  REPLACE "0" "" 3 %LastColumn% 2 %LASTROW%
+  FOR x = 3 TO %LastColumn%
+    GRIDANALYSIS 1 %x% %x% 2 %LASTROW% 0 1 0 1 1 0 0
+    DEF CountDaysValues = %ANALYSEPOSVALUES% + %ANALYSENEGVALUES% + %ANALYSENREMPTYCELLS%
+    IF (%CountDaysValues%<14)
+      WRITECELLS "NaN" %x% %x% 2 %LASTROW% 0
+    ELSE
+      IF (%CountDaysValues%>0)
+        REPLACE "NaN" "0" %x% %x% 2 %LASTROW%
+      ENDIF
+    ENDIF
+  NEXT
+  COMPRESSROWS 2 %LASTROW% 0 1 0
+ 
+  # remove empty meters
+  DELETECOLUMNS 1 2
+  COUNTCOLUMNS maxcol = 1
+  MATRIX2COLUMN 1 %maxcol% 1 %LASTROW% 1
+  COLUMN2MATRIX 1 1 %LASTROW% 0 2
+  #
+  PASTECELLSFROMVAR Data 3 1 ";" "|"
+  DELETEROWS 1 %LASTROW% 2 "NaN" 1
+  # add remaining meters to count an reset the grid
+  DEF Counting = %Counting% + %LASTROW%
+  IF %LASTROW% > 0
+ 
+    COPYCELLSTOVAR ActiveMetersTemp = 1 1 1 %LASTROW% ","
+    DEF ActiveMetersTotal = %ActiveMetersTotal$% + "," + %ActiveMetersTemp$%
+    DEF nextrow = %LASTROW% + 1
+    PASTECELLSFROMVAR ActiveMetersTotalCat 3 %nextrow% ";" "|"
+    COPYCELLSTOVAR ActiveMetersTotalCat = 3 5 1 %LASTROW% ";" "|"
+ 
+  ENDIF
+  DEF startrow = %startrow% + %MaxNrMeters%
+  NEWGRID 1 1 80
+  PASTECELLS 1 1
+  IF %startrow% > %LASTROW%
+    # check if we are done
+    BREAK
+  ENDIF
+  DEF logtext = "Number of meters checked for data: "+%startrow$%+"/"+ %LASTROW$%
+  INFOLINE 1 %logtext$%
+ 
+ENDWHILE
+ 
+NEWGRID 1 1 80
+PASTECELLSFROMVAR ActiveMetersTotalCat 1 1 ";" "|"
+COLUMNTYPE 1 1 0
+COLUMNTYPE 2 3 1
+SORT 1 3 1 %LASTROW% 0 1 2 0
+SORT 1 3 1 %LASTROW% 0 1 3 2
+ 
+JOINCOLUMNS 2 3 1 %LASTROW% 1_
+WRITECELLS "1" 1 1 1 %LASTROW%
+COLUMNTYPE 1 1 0
+COLUMNTYPE 2 2 1
+COMPRESSROWS 1 %LASTROW% 2 "1" "0" 1 1
+SPLITCOLUMN 2 4 0 0 "_" 0
+ 
+CALCULATESTATISTICS check = "SUM" 1 1 1 %LASTROW% 1
+IF %check% != %Counting%
+  DEF logtext = "Number of 'Electricity' meters per category not equal to total!! " + %check$% + " vs " + %Counting$%
+  LOGLINE 1 %logtext$%
+ENDIF
+ 
+DEF logtext = "Number of active 'Electricity' telemetric meters: " + %Counting$% + " / " + %TM_meters_withNaNs$%
+INFOLINE 1 %logtext$%
+DEF totalcount = %totalcount% +  %Counting%
+ 
+#DEF logtext = "Total active time series count: "+%totalcount$%
+#INFOLINE 1 %logtext$%
+ 
+# -------------------------------------------------------------------------------------------------
+# Check amount of active 'Gas' telemetric meters
+# -------------------------------------------------------------------------------------------------
+ 
+NEWGRID 1 1 80
+CLEARARRAY sql[]
+DEF ActiveMetersTotal = ""
+ 
+DEF sql[1] = "SELECT m.CODE, mp.PRODUCTNAME, seg.DESCRIPTION FROM "+%DATABASE_SCHEMA$%+".D_METER m "
+DEF sql[2] = " LEFT JOIN "+%DATABASE_SCHEMA$%+".D_METERPRODUCT mp on m.METERPRODUCTNR = mp.NR "
+DEF sql[3] = " LEFT JOIN "+%DATABASE_SCHEMA$%+".D_METERSEGMETER seglink on m.NR = seglink.METERNR "
+DEF sql[4] = " LEFT JOIN "+%DATABASE_SCHEMA$%+".D_METERSEGMENT seg on seglink.SEGNR = seg.NR "
+DEF sql[5] = " WHERE m.METERTYPE = 0 AND seg.ADMNR = 0 "
+# Only check on startdate to exclude histotic meters, meters from the new year will be excluded based on data content
+IF UPPERCASE(%DATABASE_TYPE$%) == "ORACLE"
+  DEF sql[6] = " AND m.RECEIVEDATE >= TO_DATE('"+%StartYear$%+"','YYYY-MM-DD')"
+ELSE
+  IF  UPPERCASE(%DATABASE_TYPE$%) == "MSSQL"
+    DEF sql[6] = " AND m.RECEIVEDATE >= CONVERT(DATETIME, '"+%StartYear$%+"', 120)"
+  ENDIF
+ENDIF
+#IF UPPERCASE(%DATABASE_TYPE$%) == "ORACLE"
+#  DEF sql[6] = " AND  m.STARTDATE < TO_DATE('"+%EndYear$%+"','YYYY-MM-DD')"
+#  DEF sql[7] = " AND ( m.ENDDATE   > TO_DATE('"+%StartYear$%+"','YYYY-MM-DD') OR m.ENDDATE = TO_DATE('1899-12-30', 'YYYY-MM-DD') ) "
+#ELSE
+#  IF  UPPERCASE(%DATABASE_TYPE$%) == "MSSQL"
+#    DEF sql[6] = " AND  m.STARTDATE < CONVERT (DATETIME, '"+%EndYear$%+"', 120)"
+#    DEF sql[7] = " AND ( m.ENDDATE   > CONVERT (DATETIME, '"+%StartYear$%+"', 120) OR m.ENDDATE = CONVERT (DATETIME, '1899-12-30', 120) ) "
+#  ENDIF
+#ENDIF
+DEF sql[8] = " AND  mp.PRODUCTID = 3"
+DEF sql[0] = 8
+MAKESTRINGOFARRAY sqlstr = sql[] %sql[0]% 1 " "
+#INFOLINE 1 %sqlstr$%
+DBSQLSELECT test = 1 1 %sqlstr$%
+IF %test$% != "OK"
+  ERRORLINE 1 %test$%
+ENDIF
+DEF TM_meters_withNaNs = %LASTROW%
+ 
+######TESTING ############
+#DELETEROWS 251 %LASTROW%
+######TESTING ############
+ 
+# ---------------------------------------
+# Check how many meters actually received data
+# Check all meters but to keep it from running in a time out we check the metes in batches.
+# ---------------------------------------
+ 
+DEF Counting = 0
+DEF startrow = 1
+DEF endrow = 0
+DEF ActiveMetersTemp = ""
+DEF ActiveMetersTotalCat = ""
+ 
+DEF logtext = "This amount of 'Gas' meters will be checked for data: " + %LASTROW$%
+INFOLINE 1 %logtext$%
+ 
+WHILE %endrow% < %LASTROW%
+ 
+  DEF endrow = %startrow% + %MaxNrMeters% - 1
+  IF %endrow% > %LASTROW%
+    DEF endrow = %LASTROW%
+  ENDIF
+ 
+  COUNTCOLUMNS MaxCol = 1
+  COPYCELLSTOVAR ImportStr = 1 1 %startrow% %endrow%
+  COPYCELLSTOVAR Data = 1 %MaxCol% %startrow% %endrow% ";" "|"
+  COPYCELLS 1 %MaxCol% 1 %LASTROW%
+ 
+  # with this period and NaN count, you can easily check if a meter received any data this year.
+  DBIMPORT test = %ImportStr$% "yyyy.mm.dd" "hh:mm" 1 %StartYear$% %EndYear$% DX 0 0 1 1 "0" "" "" "0" "0" "" "0" "0"
+  IF %test% < 0
+    DEF logtext = "Count before block: " + %Counting$%
+    INFOLINE 1 %logtext$%
+    DEF logtext = "Checked < " + %startrow$%
+    INFOLINE 1 %logtext$%
+    DEF logtext = "Error on DBIMPORT " + %test$%
+    ERRORLINE 1 %logtext$%
+  ENDIF
+ 
+  COUNTCOLUMNS LastColumn = 1
+  REPLACE "0" "" 3 %LastColumn% 2 %LASTROW%
+  FOR x = 3 TO %LastColumn%
+    GRIDANALYSIS 1 %x% %x% 2 %LASTROW% 0 1 0 1 1 0 0
+    DEF CountDaysValues = %ANALYSEPOSVALUES% + %ANALYSENEGVALUES% + %ANALYSENREMPTYCELLS%
+    IF (%CountDaysValues%<14)
+       WRITECELLS "NaN" %x% %x% 2 %LASTROW% 0
+    ELSE
+      IF (%CountDaysValues%>0)
+        REPLACE "NaN" "0" %x% %x% 2 %LASTROW%
+      ENDIF
+    ENDIF
+  NEXT
+  COMPRESSROWS 2 %LASTROW% 0 1 0
+ 
+  # remove empty meters
+  DELETECOLUMNS 1 2
+  COUNTCOLUMNS maxcol = 1
+  MATRIX2COLUMN 1 %maxcol% 1 %LASTROW% 1
+  COLUMN2MATRIX 1 1 %LASTROW% 0 2
+  #
+  PASTECELLSFROMVAR Data 3 1 ";" "|"
+  DELETEROWS 1 %LASTROW% 2 "NaN" 1
+  # add remaining meters to count an reset the grid
+  DEF Counting = %Counting% + %LASTROW%
+  IF %LASTROW% > 0
+ 
+    COPYCELLSTOVAR ActiveMetersTemp = 1 1 1 %LASTROW% ","
+    DEF ActiveMetersTotal = %ActiveMetersTotal$% + "," + %ActiveMetersTemp$%
+    DEF nextrow = %LASTROW% + 1
+    PASTECELLSFROMVAR ActiveMetersTotalCat 3 %nextrow% ";" "|"
+    COPYCELLSTOVAR ActiveMetersTotalCat = 3 5 1 %LASTROW% ";" "|"
+ 
+  ENDIF
+  DEF startrow = %startrow% + %MaxNrMeters%
+  NEWGRID 1 1 80
+  PASTECELLS 1 1
+  IF %startrow% > %LASTROW%
+    # check if we are done
+    BREAK
+  ENDIF
+  DEF logtext = "Number of meters checked for data: "+%startrow$%+"/"+ %LASTROW$%
+  INFOLINE 1 %logtext$%
+ 
+ENDWHILE
+ 
+NEWGRID 1 1 80
+PASTECELLSFROMVAR ActiveMetersTotalCat 1 1 ";" "|"
+COLUMNTYPE 1 1 0
+COLUMNTYPE 2 3 1
+SORT 1 3 1 %LASTROW% 0 1 2 0
+SORT 1 3 1 %LASTROW% 0 1 3 2
+ 
+JOINCOLUMNS 2 3 1 %LASTROW% 1_
+WRITECELLS "1" 1 1 1 %LASTROW%
+COLUMNTYPE 1 1 0
+COLUMNTYPE 2 2 1
+COMPRESSROWS 1 %LASTROW% 2 "1" "0" 1 1
+SPLITCOLUMN 2 4 0 0 "_" 0
+ 
+CALCULATESTATISTICS check = "SUM" 1 1 1 %LASTROW% 1
+IF %check% != %Counting%
+  DEF logtext = "Number of 'Gas' meters per category not equal to total!! " + %check$% + " vs " + %Counting$%
+  LOGLINE 1 %logtext$%
+ENDIF
+ 
+DEF logtext = "Number of active 'Gas' telemetric meters: " + %Counting$% + " / " + %TM_meters_withNaNs$%
+INFOLINE 1 %logtext$%
+DEF totalcount = %totalcount% +  %Counting%
+ 
+DEF logtext = "Total active time series count: "+%totalcount$%
+INFOLINE 1 %logtext$%
+ 
+# -------------------------------------------------------------------------------------------------------------------------
+# END OF SCRIPT
+# -------------------------------------------------------------------------------------------------------------------------

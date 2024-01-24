@@ -1,0 +1,162 @@
+#----------------------------------------------------------------------------------------------------------------------------
+#  E N E R G Y 2 1   B . V .
+# ---------------------------------------------------------------------------------------------------------------------------
+#
+#  Script      : Generic Metering Point
+#
+#  Customer    : Energy21
+#  Environment :
+#  Author      : VA
+#  Date        : 19-01-2024
+#  Version     : 0.1
+#  Info        : servicedesk@energy21.nl
+#  GENnr       : na
+#
+#  Input       : Gridpoint and sales contract details
+#  Inputloc    : process
+#  Output      : CSV
+#  Outputloc   : output loc in var
+#
+#  Revisions:
+#  Author   Date        Version  Description
+#  -------  ----------  ------   -------------
+#  VA       19-01-2024  0.1      Initial
+
+# -------------------------------------------------------------------------------------------------------------------------
+# WORKSHEET VARIABLES
+# -------------------------------------------------------------------------------------------------------------------------
+
+VAR CheckYear MaxNrMeters DATABASE_TYPE DATABASE_SCHEMA DATAFILE
+DEF DATAFILE  = "C:\Users\VasishArvind\meterpointinfo.xlsx"
+# Batch size of DBIMPORT:
+DEF MaxNrMeters = 50
+# Choose MSSQL or ORACLE
+DEF DATABASE_TYPE = "MSSQL"
+DEF DATABASE_SCHEMA = %DBSCHEMA$%
+
+# -------------------------------------------------------------------------------------------------------------------------
+# End of parameters (user settings)      -       DO NOT EDIT BELOW THIS LINE
+# -------------------------------------------------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------
+# SCRIPT PARAMETERS
+# -------------------------------------------------------------------------------------------------------------------------
+DBCREATESCRIPTPARAMETER 1 "MAIL"             "vasish.arvind@energy21.com"       "Email address to send mail afer receiving message"
+DBCREATESCRIPTPARAMETER 1 "CC"               ""       "Email CC address to send mail afer receiving message"
+DBCREATESCRIPTPARAMETER 1 "Sender"           "no-reply@energy21.com"       "Define the sender of the e-mail(s) that will be sent."
+DBCREATESCRIPTPARAMETER 1 "Folder"           "C:\Users\VasishArvind\"       "Folder used for storing email body text."
+# ---------------------------------------------------------------------------------------------------------------------------
+# End of parameters (user settings)
+# ---------------------------------------------------------------------------------------------------------------------------
+
+# -------------------------------------------------------------------------------------------------------------------------
+# SCRIPT VARIABLES
+# -------------------------------------------------------------------------------------------------------------------------
+
+VAR sql[] sqlstr test maxcol Counting startrow endrow ImportStr logtext timecheck
+VAR i_type Type[] ImportType[] totalcount NrGP ActiveMetersTotal ActiveMetersTemp data nextrow
+VAR ActiveMetersTotalCat i TM_meters_withNaNs check StartYear EndYear
+VAR NrMeters gridcolumn CountDaysValues x LastColumn text BodyText Subject KeepGrid NrGPpower NrGPgas PRFpower PRFgas
+VAR query result result2 mnd_now year_now day Startdate Enddate TMTpower TMTgas totsales totsales_wogp pgppower pgpgas totalcountpower totalcountgas
+
+#-------------------------------------------------------------Function-------------------------------------------------------------------------------------------------
+FUNCTION FUNC_SEND_MAIL f_Result = f_Addresses f_Subject f_Sender f_AddressesCC f_BodyText f_Attachment
+  # This function sends e-mails through SMTP using global settings and elements of a specific process.
+  # The e-mail addresses should be separated by a comma (for both the TO and CC).
+  # If the subject is emtpy, this function will set the subject to 'GEN_eBase_Mailing'
+  # The sender of the e-mail can be empty. Default global setting will then be used.
+  # The bodytext variable should indicate towards a file that is stored on a specified network location.
+  # If an attachment should be added, the directory and filename are needed to add to an e-mail
+  # If all goes well the result will return the text ""
+
+  # Declare variables
+  VAR f_continue f_login
+
+  # Set the processing variable to its default setting
+  DEF f_continue = 0
+
+  # Perform checks on input
+  # f_Addresses
+  IF (%f_Addresses$% == "")
+    DEF f_Result   = "There is no e-mail address defined! Mailing function terminated..."
+    DEF f_continue = 1
+  ENDIF
+  # f_Subject
+  IF (%f_Subject$% == "")
+    DEF f_Subject = "EBASE_Mailing"
+  ENDIF
+  # f_Sender
+  IF (%f_Sender$% == "")
+    DEF f_Sender = %GLOB_MAIL_SENDER$%
+  ENDIF
+  # f_BodyText
+  IF (%f_BodyText$% != "")
+    IF NOT FILEEXISTS(%f_BodyText$%)
+      DEF f_Result   = "BodyText should be used but the BodyText file doesn't exist or is not accessible by EBASE ('" + %f_BodyText$% + "'). Mailing function terminated..."
+      DEF f_continue = 1
+    ENDIF
+  ENDIF
+  # f_Attachment
+  IF (%f_Attachment$% != "")
+    IF NOT FILEEXISTS(%f_Attachment$%)
+      DEF f_Result   = "Attachment should be added but the file doesn't exist or is not accessible by EBASE ('" + %f_Attachment$% + "'). Mailing function terminated..."
+      DEF f_continue = 1
+    ENDIF
+  ENDIF
+
+  # Check if mail should be sent
+  IF (%f_continue% == 0)
+    # Send e-mail
+    DEF f_login = %GLOB_MAIL_LOGINNAME$% + ";" + %GLOB_MAIL_PASSWORD$%
+    SMTPSENDMAIL f_Result = %f_Addresses$% %f_login$% %GLOB_MAIL_HOST$% %GLOB_MAIL_SMTPPORT$% %f_Subject$% %f_Sender$% %f_AddressesCC$% %GLOB_MAIL_TIMEOUT$% %f_BodyText$% %f_Attachment$%
+  ENDIF
+
+ENDFUNCTION
+#--------------------------------------------------------------------------------------------------------------------------
+
+# -------------------------------------------------------------------------------------------------------------------------
+# START OF SCRIPT
+# -------------------------------------------------------------------------------------------------------------------------
+
+DBREFRESH
+DEF logtext = "Checking subscription parameters for year "+%CheckYear$%+" in database schema "+%DBSCHEMA$%+"."
+INFOLINE 1 %logtext$%
+
+#Loop time period of 12 months and break down monthly
+NEWGRID 25 100 64
+FOR i = 1 TO 12
+DEF query = "SELECT dateadd(month,datediff(month,0,getdate())-'"+%i$%+"',0)"
+DBSQLSELECT result = 1 1 %query$%
+DEFXY Startdate = 1 1
+DEF logtext = "Start date': "+%Startdate$%
+INFOLINE 1 %logtext$%
+
+DEF query = "SELECT dateadd(month,datediff(month,-1,getdate())-'"+%i$%+"',-1)"
+DBSQLSELECT result = 2 1 %query$%
+DEFXY Enddate = 2 1
+DEF logtext = "End date': "+%Enddate$%
+INFOLINE 1 %logtext$%
+
+# ---------------------------------------
+# Check amount of all TMT Power
+# ---------------------------------------
+NEWGRID 1 1 80
+DEF sql[1] = "SELECT COUNT(DISTINCT(m.CODE)) FROM "+%DATABASE_SCHEMA$%+".D_METER m JOIN "+%DATABASE_SCHEMA$%+".D_METERPRODUCT mp ON m.METERPRODUCTNR = mp.NR WHERE mp.PRODUCTNAME = 'Electricity'"
+#DEF sql[2] = "WHERE m.STARTDATE >= CONVERT (DATETIME, '"+%Startdate$%+"', 105) AND m.ENDDATE <= CONVERT (DATETIME, '"+%Enddate$%+"', 105)"
+#DEF sql[2] = "WHERE m.STARTDATE <= CONVERT (DATETIME, '"+%EndYear$%+"', 105) AND m.ENDDATE >= CONVERT (DATETIME, '"+%StartYear$%+"', 105) AND m.ENDDATE >= m.STARTDATE"
+DEF sql[2] = "WHERE CONVERT (DATETIME, '"+%Startdate$%+"', 105) >= DATE(m.STARTDATE) AND CONVERT (DATETIME, '"+%Enddate$%+"', 105) <= DATE(m.ENDDATE)"
+DEF sql[0] = 2
+MAKESTRINGOFARRAY sqlstr = sql[] %sql[0]% 1 " "
+
+
+NEWGRID 1 1 80
+DBSQLSELECT test = 1 1 %sqlstr$%
+IF (%result$%!="OK")
+  ERRORLINE 1 %result$%
+  STOP
+ENDIF
+
+DEFXY TMTpower = 1 1
+DEF logtext = "Total TMT 'Power': "+%TMTpower$%
+INFOLINE 1 %logtext$%
+NEXT
+
